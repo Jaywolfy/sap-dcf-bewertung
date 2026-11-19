@@ -4,15 +4,16 @@ Wer eine Annahme ändern will, ändert sie hier und baut das Modell neu (python 
 oder überschreibt die blau geschriebene Zelle direkt in Excel.
 """
 
-FORECAST_YEARS = (2026, 2027, 2028, 2029, 2030)
+FORECAST_YEARS = tuple(range(2026, 2041))
 
 # Umsatzwachstum je Jahr. SAP ist 2023 bis 2025 um 5,7 %, 9,5 % und 7,7 % gewachsen; der Umstieg der Kunden
-# in die Cloud trägt das Wachstum noch einige Jahre und läuft dann aus.
-REVENUE_GROWTH = (0.09, 0.09, 0.08, 0.07, 0.06)
+# in die Cloud trägt das Wachstum noch einige Jahre. Danach läuft es linear auf 3 % im Jahr 2040 aus.
+REVENUE_GROWTH = (0.09, 0.09, 0.08, 0.07, 0.06, 0.055, 0.05, 0.045, 0.04, 0.038, 0.036, 0.034, 0.032, 0.031, 0.03)
 
 # Operative Marge (Betriebsergebnis durch Umsatz). 2025 lag sie bei 26,1 %. Cloud-Umsatz skaliert, deshalb
-# steigt sie hier langsam weiter.
-EBIT_MARGIN = (0.27, 0.28, 0.285, 0.29, 0.295)
+# steigt sie bis 2030 auf 30 % und bleibt dort; ein Wettbewerbsvorteil dieser Größe hält sich nicht ewig, deshalb
+# steigt sie danach nicht weiter.
+EBIT_MARGIN = (0.27, 0.28, 0.285, 0.29, 0.295, *([0.30] * 10))
 
 TAX_RATE = 0.28            # Steuerquote 2025: 28,7 %
 DEPRECIATION_RATE = 0.036  # Abschreibungen in Prozent vom Umsatz, wie 2025

@@ -4,7 +4,10 @@ Jede Zahl im Modell ist entweder eine Eingabe (blaue Schrift) oder eine Excel-Fo
 Zelle ändert, sieht sofort den neuen Wert je Aktie. Farben der Kopfzeilen wie jasonwolf.de.
 """
 
+from datetime import date
+
 from openpyxl import Workbook
+from openpyxl.chart import BarChart, LineChart, Reference, Series
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -149,7 +152,7 @@ def sheet_assumptions(wb, data, inputs):
 
     header(ws, 23, ["Operative Annahmen", "Wert", "Quelle oder Begründung"])
     operating = [
-        (24, "Ewiges Wachstum nach 2030", inputs.terminal_growth, "Annahme; darf nicht über dem langfristigen Wirtschaftswachstum liegen"),
+        (24, f"Ewiges Wachstum nach {annahmen.FORECAST_YEARS[-1]}", inputs.terminal_growth, "Annahme; darf nicht über dem langfristigen Wirtschaftswachstum liegen"),
         (25, "Abschreibungen in % vom Umsatz", inputs.depreciation_rate, "Wie 2025 (Blatt Historie)"),
         (26, "Investitionen in % vom Umsatz", inputs.capex_rate, "Wie 2025 (Blatt Historie)"),
         (27, "Umlaufvermögen je Euro Umsatzzuwachs", inputs.nwc_rate, "Vorsichtige Annahme; SAP erhält Zahlungen oft im Voraus"),
@@ -162,11 +165,12 @@ def sheet_assumptions(wb, data, inputs):
     header(ws, 29, ["Prognose je Jahr", *[str(year) for year in annahmen.FORECAST_YEARS]])
     put(ws, "A30", "Umsatzwachstum")
     put(ws, "A31", "Operative Marge")
-    for col, growth, margin in zip("BCDEF", inputs.revenue_growth, inputs.ebit_margin, strict=True):
+    forecast_cols = [get_column_letter(index) for index in range(2, 2 + len(annahmen.FORECAST_YEARS))]  # B bis P
+    for col, growth, margin in zip(forecast_cols, inputs.revenue_growth, inputs.ebit_margin, strict=True):
         put(ws, f"{col}30", growth, INPUT, "0.0%", IN_FILL)
         put(ws, f"{col}31", margin, INPUT, "0.0%", IN_FILL)
     put(ws, "A32", "Zum Vergleich: SAP wuchs 2023 bis 2025 um 5,7 %, 9,5 % und 7,7 %; die operative Marge lag 2025 bei 26,1 %.", NOTE)
-    widths(ws, 40, 13, 5)
+    widths(ws, 40, 13, len(forecast_cols))
     ws.column_dimensions["C"].width = 13
 
 
@@ -175,7 +179,8 @@ def sheet_dcf(wb):
     title(ws, "DCF-Bewertung", "Mio. EUR. Bewertungsstichtag 31.12.2025; alle Cashflows fallen am Jahresende an.")
     years = [f"{BASE_YEAR} (Ist)", *[f"{year} (Plan)" for year in annahmen.FORECAST_YEARS]]
     header(ws, 4, ["Mio. EUR", *years])
-    plan = "CDEFG"
+    plan = [get_column_letter(index) for index in range(3, 3 + len(annahmen.FORECAST_YEARS))]  # C bis Q
+    last = plan[-1]
     put(ws, "A5", "Jahre ab Stichtag", NOTE)
     for index, col in enumerate(plan, start=1):
         put(ws, f"{col}5", index, NOTE, "0")
@@ -189,7 +194,7 @@ def sheet_dcf(wb):
     put(ws, "B9", "=B8/B6", TEXT, PCT)
     for index, col in enumerate(plan):
         previous = "B" if index == 0 else plan[index - 1]
-        driver = "BCDEF"[index]  # Spalte des Jahres auf dem Blatt Annahmen
+        driver = get_column_letter(index + 2)  # Spalte des Jahres auf dem Blatt Annahmen, ab B
         put(ws, f"{col}6", f"={previous}6*(1+Annahmen!{driver}30)", TEXT, MIO)
         put(ws, f"{col}7", f"={col}6/{previous}6-1", TEXT, PCT)
         put(ws, f"{col}8", f"={col}6*Annahmen!{driver}31", TEXT, MIO)
@@ -205,9 +210,11 @@ def sheet_dcf(wb):
 
     header(ws, 19, ["Vom Cashflow zum Wert je Aktie", "Mio. EUR"])
     steps = [
-        (20, "Summe der Barwerte 2026 bis 2030", "=SUM(C17:G17)", MIO, TEXT),
-        (21, "Endwert 2030 (alle Cashflows danach)", "=G15*(1+Annahmen!B24)/(Annahmen!B21-Annahmen!B24)", MIO, TEXT),
-        (22, "Barwert des Endwerts", "=B21*G16", MIO, TEXT),
+        (20, f"Summe der Barwerte {annahmen.FORECAST_YEARS[0]} bis {annahmen.FORECAST_YEARS[-1]}",
+         f"=SUM({plan[0]}17:{last}17)", MIO, TEXT),
+        (21, f"Endwert {annahmen.FORECAST_YEARS[-1]} (alle Cashflows danach)",
+         f"={last}15*(1+Annahmen!B24)/(Annahmen!B21-Annahmen!B24)", MIO, TEXT),
+        (22, "Barwert des Endwerts", f"=B21*{last}16", MIO, TEXT),
         (23, "Unternehmenswert", "=B20+B22", MIO, BOLD),
         (24, "+ Nettoliquidität", "=Annahmen!B7-Annahmen!B6", MIO, TEXT),
         (25, "Wert des Eigenkapitals", "=B23+B24", MIO, BOLD),
@@ -233,7 +240,7 @@ def sheet_dcf(wb):
     for row, label, formula, fmt in checks:
         put(ws, f"A{row}", label)
         put(ws, f"B{row}", formula, TEXT, fmt)
-    widths(ws, 46, 14, 6)
+    widths(ws, 46, 14, len(plan) + 1)
 
 
 def sheet_sensitivity(wb):
@@ -247,8 +254,8 @@ def sheet_sensitivity(wb):
         for col in "BCDEF":
             centre = row == 7 and col == "D"
             put(ws, f"{col}{row}",
-                f"=(SUMPRODUCT(DCF!$C$15:$G$15/(1+$A{row})^DCF!$C$5:$G$5)"
-                f"+DCF!$G$15*(1+{col}$4)/($A{row}-{col}$4)/(1+$A{row})^5+DCF!$B$24)/DCF!$B$26",
+                f"=(SUMPRODUCT(DCF!$C$15:$Q$15/(1+$A{row})^DCF!$C$5:$Q$5)"
+                f"+DCF!$Q$15*(1+{col}$4)/($A{row}-{col}$4)/(1+$A{row})^{len(annahmen.FORECAST_YEARS)}+DCF!$B$24)/DCF!$B$26",
                 RESULT if centre else TEXT, EUR, RESULT_FILL if centre else None)
     put(ws, "A11", "Aktienkurs zum Vergleich (EUR)")
     put(ws, "B11", "=Annahmen!B4", LINK, EUR)
@@ -279,25 +286,230 @@ def sheet_overview(wb, data):
     guide = [
         ("Historie", "Jahresabschlüsse 2022 bis 2025 und daraus abgeleitete Quoten"),
         ("Annahmen", "Alle Eingaben: Marktdaten, Kapitalkosten, Wachstum und Marge je Jahr"),
-        ("DCF", "Prognose der freien Cashflows 2026 bis 2030 und Herleitung des Werts je Aktie"),
+        ("DCF", f"Prognose der freien Cashflows {annahmen.FORECAST_YEARS[0]} bis {annahmen.FORECAST_YEARS[-1]} "
+                "und Herleitung des Werts je Aktie"),
         ("Sensitivität", "Wert je Aktie bei anderen Kapitalkosten und anderem ewigen Wachstum"),
+        ("Zeitverlauf", "Kennzahlen über die Jahre mit Diagrammen und Kursverlauf der letzten fünf Jahre"),
+        ("Langfristig", "Umsatz und Betriebsergebnis seit 2000, Kursverlauf seit 1998 und Diagramme"),
     ]
     for row, (name, text) in enumerate(guide, start=14):
         put(ws, f"A{row}", name, BOLD)
         put(ws, f"B{row}", text)
-    header(ws, 19, ["Farben", ""])
-    put(ws, "A20", "Blaue Schrift auf hellem Grund", INPUT, fill=IN_FILL)
-    put(ws, "B20", "Eingabe; lässt sich ändern")
-    put(ws, "A21", "Schwarze Schrift")
-    put(ws, "B21", "Formel innerhalb des Blatts")
-    put(ws, "A22", "Grüne Schrift", LINK)
-    put(ws, "B22", "Übernahme von einem anderen Blatt")
-    put(ws, "A24", "Einschränkung: Der Stichtag der Bilanz ist der 31.12.2025, der Aktienkurs stammt vom "
+    header(ws, 20, ["Farben", ""])
+    put(ws, "A21", "Blaue Schrift auf hellem Grund", INPUT, fill=IN_FILL)
+    put(ws, "B21", "Eingabe; lässt sich ändern")
+    put(ws, "A22", "Schwarze Schrift")
+    put(ws, "B22", "Formel innerhalb des Blatts")
+    put(ws, "A23", "Grüne Schrift", LINK)
+    put(ws, "B23", "Übernahme von einem anderen Blatt")
+    put(ws, "A25", "Einschränkung: Der Stichtag der Bilanz ist der 31.12.2025, der Aktienkurs stammt vom "
                    f"{data['kurs']['tag']}. Was SAP seit dem Stichtag verdient und ausgeschüttet hat, ist nicht berücksichtigt.", NOTE)
     widths(ws, 46, 18, 1)
     ws.column_dimensions["B"].width = 70
     for row in range(5, 12):
         ws[f"B{row}"].alignment = Alignment(horizontal="left")
+
+
+def style_chart(chart, heading, y_format, width=16, height=7.5):
+    chart.title = heading
+    chart.width, chart.height = width, height
+    chart.legend.position = "b"
+    chart.y_axis.number_format = y_format
+    chart.x_axis.delete = False
+    chart.y_axis.delete = False
+    chart.x_axis.tickLblPos = "low"
+
+
+def color_series(chart, colors, line=False):
+    for series, color in zip(chart.series, colors, strict=True):
+        if line:
+            series.graphicalProperties.line.solidFill = color
+            series.graphicalProperties.line.width = 22000
+            series.smooth = False
+        else:
+            series.graphicalProperties.solidFill = color
+            series.graphicalProperties.line.solidFill = color
+
+
+def sheet_timeline(wb, data):
+    ws = wb.create_sheet("Zeitverlauf")
+    years = ["2022", "2023", "2024", "2025"]
+    title(ws, "Zeitverlauf", "SAP SE. Jahreswerte aus dem Blatt Historie (grüne Schrift), Kurse wöchentlich über fünf "
+                             f"Jahre. Quelle: Yahoo Finance, abgerufen am {data['abgerufen_am']}.")
+    header(ws, 4, ["Mio. EUR", *years])
+    links = [  # (Zeile, Beschriftung, Formel mit {c} für die Spalte in Historie, Format)
+        (5, "Umsatz", "=Historie!{c}4", MIO),
+        (7, "Betriebsergebnis", "=Historie!{c}6", MIO),
+        (9, "Jahresüberschuss", "=Historie!{c}11", MIO),
+        (10, "Free Cashflow", "=Historie!{c}17", MIO),
+        (12, "Nettoliquidität", "=Historie!{c}23", MIO),
+        (13, "Ausstehende Aktien (Mio. Stück)", "=Historie!{c}24", "#,##0.0"),
+    ]
+    for row, label, formula, fmt in links:
+        put(ws, f"A{row}", label)
+        for col in "BCDE":
+            put(ws, f"{col}{row}", formula.format(c=col), LINK, fmt)
+    ratios = [  # (Zeile, Beschriftung, Formel mit {c} für die Spalte, Format)
+        (8, "  Operative Marge", "={c}7/{c}5", PCT),
+        (11, "  Free-Cashflow-Marge", "={c}10/{c}5", PCT),
+        (14, "Free Cashflow je Aktie (EUR)", "={c}10/{c}13", EUR),
+        (15, "Jahresüberschuss je Aktie (EUR)", "={c}9/{c}13", EUR),
+    ]
+    for row, label, formula, fmt in ratios:
+        put(ws, f"A{row}", label, NOTE if label.startswith("  ") else TEXT)
+        for col in "BCDE":
+            put(ws, f"{col}{row}", formula.format(c=col), TEXT, fmt)
+    put(ws, "A6", "  Wachstum zum Vorjahr", NOTE)
+    for previous, col in zip("BCD", "CDE", strict=True):
+        put(ws, f"{col}6", f"={col}5/{previous}5-1", TEXT, PCT)
+    put(ws, "A16", "Das Betriebsergebnis 2024 ist ohne Restrukturierungskosten (siehe Historie). Nettoliquidität ist "
+                   "liquide Mittel minus Finanzschulden.", NOTE)
+
+    years_ref = Reference(ws, min_col=2, max_col=5, min_row=4)
+    bars = BarChart()
+    bars.type = "col"
+    for row, label in ((5, "Umsatz"), (7, "Betriebsergebnis")):
+        bars.series.append(Series(Reference(ws, min_col=2, max_col=5, min_row=row), title=label))
+    bars.set_categories(years_ref)
+    style_chart(bars, "Umsatz und Betriebsergebnis (Mio. EUR)", "#,##0")
+    color_series(bars, [NAVY, GOLD])
+    ws.add_chart(bars, "A18")
+
+    margins = LineChart()
+    for row, label in ((8, "Operative Marge"), (11, "Free-Cashflow-Marge")):
+        margins.series.append(Series(Reference(ws, min_col=2, max_col=5, min_row=row), title=label))
+    margins.set_categories(years_ref)
+    style_chart(margins, "Margen in % vom Umsatz", "0%")
+    color_series(margins, [NAVY, GOLD], line=True)
+    ws.add_chart(margins, "A34")
+
+    cash = BarChart()
+    cash.type = "col"
+    for row, label in ((10, "Free Cashflow"), (12, "Nettoliquidität")):
+        cash.series.append(Series(Reference(ws, min_col=2, max_col=5, min_row=row), title=label))
+    cash.set_categories(years_ref)
+    style_chart(cash, "Free Cashflow und Nettoliquidität (Mio. EUR)", "#,##0")
+    color_series(cash, [NAVY, GOLD])
+    ws.add_chart(cash, "A50")
+
+    per_share = LineChart()
+    for row, label in ((14, "Free Cashflow je Aktie"), (15, "Jahresüberschuss je Aktie")):
+        per_share.series.append(Series(Reference(ws, min_col=2, max_col=5, min_row=row), title=label))
+    per_share.set_categories(years_ref)
+    style_chart(per_share, "Je Aktie (EUR)", "0.00")
+    color_series(per_share, [NAVY, GOLD], line=True)
+    ws.add_chart(per_share, "A66")
+
+    weeks = data["kurs_wochen"]
+    first = 96
+    last = first + len(weeks) - 1
+    put(ws, "A84", "Kurs über fünf Jahre (wöchentliche Schlusskurse)", BOLD)
+    stats = [  # (Zeile, Beschriftung, Formel, Format)
+        (85, "Letzter Schlusskurs (EUR)", f"=B{last}", EUR),
+        (86, "Hoch, fünf Jahre (EUR)", f"=MAX(B{first}:B{last})", EUR),
+        (87, "Tief, fünf Jahre (EUR)", f"=MIN(B{first}:B{last})", EUR),
+        (88, "Durchschnitt, fünf Jahre (EUR)", f"=AVERAGE(B{first}:B{last})", EUR),
+        (89, "Hoch, letzte 52 Wochen (EUR)", f"=MAX(B{last - 51}:B{last})", EUR),
+        (90, "Tief, letzte 52 Wochen (EUR)", f"=MIN(B{last - 51}:B{last})", EUR),
+        (91, "Veränderung, letzte 52 Wochen", f"=B{last}/B{last - 52}-1", '+0.0%;-0.0%;0.0%'),
+        (92, "Veränderung, fünf Jahre", f"=B{last}/B{first}-1", '+0.0%;-0.0%;0.0%'),
+        (93, "SAP minus DAX seit Beginn (Prozentpunkte)", f"=(B{last}/B{first}-1)-(C{last}/C{first}-1)",
+         '+0.0%;-0.0%;0.0%'),
+    ]
+    for row, label, formula, fmt in stats:
+        put(ws, f"A{row}", label)
+        put(ws, f"B{row}", formula, TEXT, fmt)
+    put(ws, "A94", "DAX skaliert = DAX-Stand geteilt durch den DAX-Startwert, mal SAP-Startkurs. Die Hoch- und "
+                   "Tiefwerte beruhen auf Wochenschlüssen.", NOTE)
+    header(ws, 95, ["Woche (Freitag)", "SAP (EUR)", "DAX (Punkte)", "DAX skaliert (EUR)"])
+    for offset, week in enumerate(weeks):
+        row = first + offset
+        put(ws, f"A{row}", date.fromisoformat(week["datum"]), INPUT, "dd.mm.yyyy", align="left")
+        put(ws, f"B{row}", week["sap"], INPUT, EUR)
+        put(ws, f"C{row}", week["dax"], INPUT, "#,##0.00")
+        put(ws, f"D{row}", f"=C{row}/$C${first}*$B${first}", TEXT, EUR)
+
+    price = LineChart()
+    for col, label in ((2, "SAP (EUR)"), (4, "DAX skaliert (EUR)")):
+        price.series.append(Series(Reference(ws, min_col=col, min_row=first, max_row=last), title=label))
+    price.set_categories(Reference(ws, min_col=1, min_row=first, max_row=last))
+    style_chart(price, "SAP-Kurs über fünf Jahre im Vergleich zum DAX", "#,##0", width=22, height=10)
+    price.x_axis.number_format = "mmm yy"
+    price.x_axis.tickLblSkip = 26
+    color_series(price, [NAVY, GOLD], line=True)
+    ws.add_chart(price, "F84")
+
+    widths(ws, 46, 13, 4)
+
+
+def sheet_long(wb, data):
+    ws = wb.create_sheet("Langfristig")
+    title(ws, "Langfristig", "SAP SE. Umsatz und Betriebsergebnis in Mio. EUR, Kurse in EUR. Quellen: Geschäftsberichte "
+                             f"der SAP für 2000 bis 2021, Yahoo Finance für 2022 bis 2025 und die Kurse "
+                             f"(abgerufen am {data['abgerufen_am']}).")
+    header(ws, 4, ["Jahr", "Umsatz", "Wachstum", "Betriebsergebnis", "Marge", "Quelle"])
+    revenue = data["umsatz_lang"]["werte"]
+    operating = data["betriebsergebnis_lang"]["werte"]
+    recent = {"2022": "B", "2023": "C", "2024": "D", "2025": "E"}  # Spalten im Blatt Historie
+    years = [str(year) for year in range(2000, 2026)]
+    for offset, year in enumerate(years):
+        row = 5 + offset
+        put(ws, f"A{row}", year, TEXT, align="left")
+        if year in recent:
+            put(ws, f"B{row}", f"=Historie!{recent[year]}4", LINK, MIO)
+            put(ws, f"D{row}", f"=Historie!{recent[year]}6", LINK, MIO)
+            put(ws, f"F{row}", "Yahoo Finance, Blatt Historie", NOTE)
+        else:
+            put(ws, f"B{row}", revenue[year], INPUT, MIO)
+            if year in operating:
+                put(ws, f"D{row}", operating[year], INPUT, MIO)
+            put(ws, f"F{row}", "Geschäftsbericht der SAP", NOTE)
+        if offset:
+            put(ws, f"C{row}", f"=B{row}/B{row - 1}-1", TEXT, PCT)
+        if year in operating or year in recent:
+            put(ws, f"E{row}", f"=D{row}/B{row}", TEXT, PCT)
+    last = 5 + len(years) - 1
+    put(ws, f"A{last + 2}", "Jährliches Umsatzwachstum 2000 bis 2025 (CAGR)")
+    put(ws, f"B{last + 2}", f"=(B{last}/B5)^(1/{len(years) - 1})-1", TEXT, PCT)
+    put(ws, f"A{last + 3}", "Jährliches Umsatzwachstum 2015 bis 2025 (CAGR)")
+    put(ws, f"B{last + 3}", f"=(B{last}/B20)^(1/10)-1", TEXT, PCT)
+    put(ws, f"A{last + 5}", "Umsatz 2000 bis 2021 aus den Geschäftsberichten (IFRS, jeweils der neueste Ausweis). 1997 bis 1999 "
+                            "fehlen, weil die Berichte in D-Mark sind und keine eindeutige Summe nennen.", NOTE)
+    put(ws, f"A{last + 6}", "Betriebsergebnis 2011 bis 2021 nach IFRS aus den Geschäftsberichten. Ab 2022 steht Yahoo "
+                            "Finance, das vom IFRS-Wert abweichen kann (siehe Blatt Historie).", NOTE)
+
+    header(ws, 4, ["Monat", "SAP-Schluss (EUR)"], first_col=8)
+    monthly = data["kurs_monate"]
+    for offset, (day, close) in enumerate(monthly):
+        row = 5 + offset
+        put(ws, f"H{row}", date.fromisoformat(day), INPUT, "mm.yyyy", align="left")
+        put(ws, f"I{row}", close, INPUT, EUR)
+    price_last = 5 + len(monthly) - 1
+
+    revenue_chart = BarChart()
+    revenue_chart.type = "col"
+    revenue_chart.series.append(Series(Reference(ws, min_col=2, min_row=5, max_row=last), title="Umsatz"))
+    revenue_chart.series.append(Series(Reference(ws, min_col=4, min_row=5, max_row=last), title="Betriebsergebnis"))
+    revenue_chart.set_categories(Reference(ws, min_col=1, min_row=5, max_row=last))
+    style_chart(revenue_chart, "Umsatz und Betriebsergebnis 2000 bis 2025 (Mio. EUR)", "#,##0", width=22, height=9)
+    color_series(revenue_chart, [NAVY, GOLD])
+    ws.add_chart(revenue_chart, "K4")
+
+    price_chart = LineChart()
+    price_chart.series.append(Series(Reference(ws, min_col=9, min_row=5, max_row=price_last), title="SAP-Schluss (EUR)"))
+    price_chart.set_categories(Reference(ws, min_col=8, min_row=5, max_row=price_last))
+    style_chart(price_chart, "SAP-Kurs seit 1998 (Monatsschluss, EUR)", "#,##0", width=22, height=10)
+    price_chart.x_axis.number_format = "yyyy"
+    price_chart.x_axis.tickLblSkip = 24
+    color_series(price_chart, [NAVY], line=True)
+    ws.add_chart(price_chart, "K24")
+
+    widths(ws, 44, 13, 4)
+    ws.column_dimensions["E"].width = 10
+    ws.column_dimensions["F"].width = 28
+    ws.column_dimensions["G"].width = 3
+    ws.column_dimensions["H"].width = 12
+    ws.column_dimensions["I"].width = 16
 
 
 def build():
@@ -309,6 +521,8 @@ def build():
     sheet_assumptions(wb, data, inputs)
     sheet_dcf(wb)
     sheet_sensitivity(wb)
+    sheet_timeline(wb, data)
+    sheet_long(wb, data)
     for ws in wb.worksheets:
         ws.sheet_properties.tabColor = NAVY
         ws.freeze_panes = "B5" if ws.title in ("Historie", "DCF") else None
